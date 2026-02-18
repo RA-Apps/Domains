@@ -8,8 +8,8 @@ from functools import lru_cache
 import dns.resolver
 
 
-# Порты для сканирования (уменьшенный список для скорости)
-COMMON_PORTS = [21, 22, 23, 25, 53, 80, 110, 143, 443, 465, 587, 993, 995, 3306, 3389, 8080, 8443]
+
+COMMON_PORTS = [21, 22, 23, 25, 53, 80, 110, 143, 443, 465, 587, 993, 995, 1500, 2200, 3306, 3389, 8080, 8443]
 
 
 def check_port(ip: str, port: int, timeout: float = 1.0) -> bool:

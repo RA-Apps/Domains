@@ -209,21 +209,12 @@ def process_domain(domain: str) -> Dict[str, Any]:
                 unique_ips.append(server["ip"])
         data["servers"] = unique_servers
     
-    # Параллельное сканирование портов для всех IP
+    # Сканирование портов только для первого IP
     if unique_ips:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_ip = {
-                executor.submit(scan_ports, ip, COMMON_PORTS, timeout=0.8): ip 
-                for ip in unique_ips
-            }
-            for future in concurrent.futures.as_completed(future_to_ip):
-                ip = future_to_ip[future]
-                try:
-                    open_ports = future.result()
-                    if open_ports:
-                        data["open_ports"][ip] = open_ports
-                except Exception:
-                    pass
+        first_ip = unique_ips[0]
+        open_ports = scan_ports(first_ip, COMMON_PORTS, timeout=0.8)
+        if open_ports:
+            data["open_ports"][first_ip] = open_ports
 
     return data
 
@@ -304,7 +295,7 @@ def print_pretty_results(results: Dict[str, Any]):
             print("\nОТКРЫТЫЕ ПОРТЫ:")
             for ip, ports in open_ports.items():
                 ports_str = ", ".join(str(p) for p in ports)
-                print(f"  • {ip}: {ports_str}")
+                print(f"  • {ports_str}")
 
         # SSL
         ssl_info = data.get("ssl", {})
