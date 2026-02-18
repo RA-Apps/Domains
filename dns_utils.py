@@ -1,5 +1,6 @@
 """DNS утилиты (оптимизированные с таймаутами)."""
 
+import concurrent.futures
 from typing import List, Optional, Dict, Any
 import dns.resolver
 import dns.reversename
@@ -51,6 +52,63 @@ def resolve_txt(domain: str) -> List[str]:
 def extract_records_by_prefix(txt_records: List[str], prefix: str) -> List[str]:
     """Извлекает TXT записи, начинающиеся с заданного префикса (регистронезависимо)."""
     return [rec for rec in txt_records if rec.lower().startswith(prefix.lower())]
+
+
+# Стандартные DKIM селекторы для проверки
+DKIM_SELECTORS = [
+    "mail", "default", "dkim", "google", "selector1", "selector2", 
+    "k1", "k2", "smtp", "email", "mx", "cloud", "amazonses",
+    "s1", "s2", "sig", "key1", "key2", "mandrill", "sendgrid",
+    "zoho", "yandex", "mailru", "pdd", "pp", "smtpapi"
+]
+
+
+def _check_dkim_selector(domain: str, selector: str) -> Optional[str]:
+    """Проверяет один DKIM селектор (для параллельного выполнения)."""
+    dkim_domain = f"{selector}._domainkey.{domain}"
+    try:
+        answers = _resolver.resolve(dkim_domain, "TXT", lifetime=1.5)
+        for r in answers:
+            if not getattr(r, "strings", None):
+                continue
+            parts = [part.decode() if hasattr(part, "decode") else str(part)
+                     for part in r.strings]
+            record = "".join(parts)
+            if record.lower().startswith("v=dkim"):
+                return f"[{selector}] {record}"
+    except Exception:
+        pass
+    return None
+
+
+def resolve_dkim(domain: str, selectors: List[str] = None, max_workers: int = 10) -> List[str]:
+    """
+    Ищет DKIM записи для домена в стандартных селекторах (параллельно).
+    
+    Args:
+        domain: Домен для проверки
+        selectors: Список селекторов (если None, используются стандартные)
+        max_workers: Количество параллельных потоков
+    
+    Returns:
+        Список найденных DKIM записей с указанием селектора
+    """
+    if selectors is None:
+        # Приоритетные селекторы первыми
+        selectors = ["mail", "default", "dkim", "google", "selector1", "selector2"]
+    
+    dkim_records = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_selector = {
+            executor.submit(_check_dkim_selector, domain, sel): sel 
+            for sel in selectors
+        }
+        for future in concurrent.futures.as_completed(future_to_selector):
+            result = future.result()
+            if result:
+                dkim_records.append(result)
+    
+    return dkim_records
 
 
 def resolve_ip_via_dns(domain: str, dns_server: str) -> List[str]:

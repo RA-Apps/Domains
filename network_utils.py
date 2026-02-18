@@ -1,10 +1,43 @@
 """Сетевые утилиты: ASN, WHOIS lookups (оптимизированные)."""
 
+import concurrent.futures
 import socket
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from functools import lru_cache
 
 import dns.resolver
+
+
+# Порты для сканирования (уменьшенный список для скорости)
+COMMON_PORTS = [21, 22, 23, 25, 53, 80, 110, 143, 443, 465, 587, 993, 995, 3306, 3389, 8080, 8443]
+
+
+def check_port(ip: str, port: int, timeout: float = 1.0) -> bool:
+    """Проверяет, открыт ли порт на указанном IP."""
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except (socket.timeout, ConnectionRefusedError, OSError):
+        return False
+
+
+def scan_ports(ip: str, ports: List[int] = None, timeout: float = 1.0, max_workers: int = 20) -> List[int]:
+    """Сканирует список портов на указанном IP параллельно."""
+    if ports is None:
+        ports = COMMON_PORTS
+    
+    open_ports = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_port = {
+            executor.submit(check_port, ip, port, timeout): port 
+            for port in ports
+        }
+        for future in concurrent.futures.as_completed(future_to_port):
+            port = future_to_port[future]
+            if future.result():
+                open_ports.append(port)
+    
+    return sorted(open_ports)
 
 
 def _parse_ripe_whois(ip: str) -> Dict[str, Optional[str]]:

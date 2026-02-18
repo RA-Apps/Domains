@@ -9,9 +9,9 @@ import idna
 import whois
 
 from utils import retry, format_date
-from dns_utils import resolve_ns, resolve_mx, resolve_txt, extract_records_by_prefix, resolve_ip_via_dns, get_ptr, parse_spf, format_spf_parsed
+from dns_utils import resolve_ns, resolve_mx, resolve_txt, extract_records_by_prefix, resolve_ip_via_dns, get_ptr, parse_spf, format_spf_parsed, resolve_dkim
 from ssl_utils import get_ssl_info
-from network_utils import asn_lookup
+from network_utils import asn_lookup, scan_ports, COMMON_PORTS
 
 
 
@@ -122,7 +122,8 @@ def process_domain(domain: str) -> Dict[str, Any]:
         "servers": [],
         "ns": [],
         "mail": {"mx": [], "spf": [], "dkim": []},
-        "ssl": {}
+        "ssl": {},
+        "open_ports": {}
     }
 
     # ========== Параллельное выполнение независимых операций ==========
@@ -133,6 +134,7 @@ def process_domain(domain: str) -> Dict[str, Any]:
         future_ns = executor.submit(resolve_ns, puny_domain)
         future_mx = executor.submit(resolve_mx, puny_domain)
         future_txt = executor.submit(resolve_txt, puny_domain)
+        future_dkim = executor.submit(resolve_dkim, puny_domain)
         future_ssl = executor.submit(get_ssl_info, puny_domain)
         
         # 2. Резолв IP через разные DNS серверы параллельно
@@ -145,6 +147,7 @@ def process_domain(domain: str) -> Dict[str, Any]:
         data["ns"] = future_ns.result()
         mx_records = future_mx.result()
         txt_records = future_txt.result()
+        dkim_records = future_dkim.result()
         data["ssl"] = future_ssl.result()
         
         # Обработка WHOIS
@@ -167,7 +170,7 @@ def process_domain(domain: str) -> Dict[str, Any]:
             "mx": mx_records,
             "spf": spf_records,
             "spf_parsed": spf_parsed,
-            "dkim": extract_records_by_prefix(txt_records, "v=dkim1"),
+            "dkim": dkim_records,
             "dmarc": extract_records_by_prefix(txt_records, "v=dmarc1")
         }
         
@@ -195,6 +198,7 @@ def process_domain(domain: str) -> Dict[str, Any]:
                 pass
     
     # Убираем дубликаты IP (сохраняем первый встреченный)
+    unique_ips = []
     if data["servers"]:
         unique_servers = []
         seen_ips = set()
@@ -202,7 +206,24 @@ def process_domain(domain: str) -> Dict[str, Any]:
             if server["ip"] not in seen_ips:
                 seen_ips.add(server["ip"])
                 unique_servers.append(server)
+                unique_ips.append(server["ip"])
         data["servers"] = unique_servers
+    
+    # Параллельное сканирование портов для всех IP
+    if unique_ips:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_ip = {
+                executor.submit(scan_ports, ip, COMMON_PORTS, timeout=0.8): ip 
+                for ip in unique_ips
+            }
+            for future in concurrent.futures.as_completed(future_to_ip):
+                ip = future_to_ip[future]
+                try:
+                    open_ports = future.result()
+                    if open_ports:
+                        data["open_ports"][ip] = open_ports
+                except Exception:
+                    pass
 
     return data
 
@@ -247,7 +268,13 @@ def print_pretty_results(results: Dict[str, Any]):
         if mail.get("dkim"):
             print("\nDKIM ЗАПИСИ:\n")
             for rec in mail["dkim"]:
-                print(f"  • {rec}")
+                # Формат: [selector] v=DKIM1...
+                if rec.startswith("[") and "]" in rec:
+                    selector, dkim_data = rec[1:].split("]", 1)
+                    print(f"  • Селектор: {selector}")
+                    print(f"    {dkim_data.strip()}")
+                else:
+                    print(f"  • {rec}")
 
         if mail.get("dmarc"):
             print("\nDMARC ЗАПИСИ:\n")
@@ -270,6 +297,14 @@ def print_pretty_results(results: Dict[str, Any]):
                 country = server.get("asn_country")
                 if not country and server.get("geoip", {}).get("country") and server["geoip"]["country"] != "N/A":
                     country = server["geoip"]["country"]
+
+        # Открытые порты
+        open_ports = data.get("open_ports", {})
+        if open_ports:
+            print("\nОТКРЫТЫЕ ПОРТЫ:")
+            for ip, ports in open_ports.items():
+                ports_str = ", ".join(str(p) for p in ports)
+                print(f"  • {ip}: {ports_str}")
 
         # SSL
         ssl_info = data.get("ssl", {})
