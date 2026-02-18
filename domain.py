@@ -16,6 +16,7 @@ from cryptography.x509.oid import NameOID
 
 # =========================== Утилиты повторных попыток ===========================
 
+
 def retry(func: Callable, *args, max_attempts=3, delay=1, **kwargs):
     """Универсальная обёртка для повторных попыток выполнения функции."""
     for attempt in range(max_attempts):
@@ -28,6 +29,7 @@ def retry(func: Callable, *args, max_attempts=3, delay=1, **kwargs):
     return None
 
 # =========================== DNS / WHOIS helper'ы ===========================
+
 
 def resolve_ns(domain: str) -> List[str]:
     """Получение NS записей для домена (с fallback на родительский)."""
@@ -42,12 +44,14 @@ def resolve_ns(domain: str) -> List[str]:
         ns = query('.'.join(domain.split('.')[-2:]))
     return ns
 
+
 def resolve_mx(domain: str) -> List[str]:
     try:
         answers = dns.resolver.resolve(domain, "MX")
         return [f"{r.preference} {str(r.exchange).rstrip('.')}" for r in answers]
     except Exception:
         return []
+
 
 def resolve_txt(domain: str) -> List[str]:
     try:
@@ -56,15 +60,18 @@ def resolve_txt(domain: str) -> List[str]:
         for r in answers:
             if not getattr(r, "strings", None):
                 continue
-            parts = [part.decode() if hasattr(part, "decode") else str(part) for part in r.strings]
+            parts = [part.decode() if hasattr(part, "decode") else str(part)
+                     for part in r.strings]
             txt_records.append("".join(parts))
         return txt_records
     except Exception:
         return []
 
+
 def extract_records_by_prefix(txt_records: List[str], prefix: str) -> List[str]:
     """Извлекает TXT записи, начинающиеся с заданного префикса (регистронезависимо)."""
     return [rec for rec in txt_records if rec.lower().startswith(prefix.lower())]
+
 
 def resolve_ip_via_dns(domain: str, dns_server: str) -> List[str]:
     resolver = dns.resolver.Resolver()
@@ -75,6 +82,7 @@ def resolve_ip_via_dns(domain: str, dns_server: str) -> List[str]:
     except Exception:
         return []
 
+
 def get_ptr(ip: str) -> Optional[str]:
     try:
         rev = dns.reversename.from_address(ip)
@@ -84,6 +92,7 @@ def get_ptr(ip: str) -> Optional[str]:
         return None
 
 # =========================== Форматирование дат ===========================
+
 
 def format_date(date) -> Optional[str]:
     """Преобразует объект даты whois или список в строку YYYY-MM-DD."""
@@ -96,6 +105,7 @@ def format_date(date) -> Optional[str]:
             pass
     return None
 
+
 def parse_cert_date(value: str) -> str:
     """Преобразует дату из сертификата в формат YYYY-MM-DD."""
     try:
@@ -106,12 +116,14 @@ def parse_cert_date(value: str) -> str:
 
 # =========================== SSL информация ===========================
 
+
 def extract_dn_field(dn, field_name="commonName"):
     for entry in dn:
         for k, v in entry:
             if k.lower() == field_name.lower():
                 return v
     return None
+
 
 def get_cn(name: x509.Name) -> str | None:
     try:
@@ -120,6 +132,7 @@ def get_cn(name: x509.Name) -> str | None:
     except (IndexError, ValueError, AttributeError):
         return None
 
+
 def get_issuer_field(issuer: x509.Name, oid) -> str | None:
     """Извлекает значение поля из объекта issuer по OID."""
     try:
@@ -127,6 +140,7 @@ def get_issuer_field(issuer: x509.Name, oid) -> str | None:
         return attrs[0].value if attrs else None
     except (IndexError, ValueError, AttributeError):
         return None
+
 
 def get_ssl_info(domain: str, timeout: float = 5.0) -> dict[str, Any]:
     result: dict[str, Any] = {}
@@ -143,18 +157,23 @@ def get_ssl_info(domain: str, timeout: float = 5.0) -> dict[str, Any]:
         cert = x509.load_der_x509_certificate(der_cert, default_backend())
 
         result["subject_cn"] = get_cn(cert.subject)
-        result["issuer_cn"]  = get_cn(cert.issuer)
+        result["issuer_cn"] = get_cn(cert.issuer)
 
         # Дополнительные поля издателя
-        result["issuer_o"]  = get_issuer_field(cert.issuer, NameOID.ORGANIZATION_NAME)
-        result["issuer_c"]  = get_issuer_field(cert.issuer, NameOID.COUNTRY_NAME)
-        result["issuer_ou"] = get_issuer_field(cert.issuer, NameOID.ORGANIZATIONAL_UNIT_NAME)
+        result["issuer_o"] = get_issuer_field(
+            cert.issuer, NameOID.ORGANIZATION_NAME)
+        result["issuer_c"] = get_issuer_field(
+            cert.issuer, NameOID.COUNTRY_NAME)
+        result["issuer_ou"] = get_issuer_field(
+            cert.issuer, NameOID.ORGANIZATIONAL_UNIT_NAME)
 
-        valid_from  = cert.not_valid_before_utc
-        valid_to    = cert.not_valid_after_utc
+        valid_from = cert.not_valid_before_utc
+        valid_to = cert.not_valid_after_utc
 
-        result["valid_from"]  = valid_from.strftime("%Y-%m-%d")  if valid_from  else None
-        result["valid_to"]    = valid_to.strftime("%Y-%m-%d")    if valid_to    else None
+        result["valid_from"] = valid_from.strftime(
+            "%Y-%m-%d") if valid_from else None
+        result["valid_to"] = valid_to.strftime(
+            "%Y-%m-%d") if valid_to else None
 
         if valid_to:
             now = datetime.now(timezone.utc)
@@ -180,6 +199,7 @@ def get_ssl_info(domain: str, timeout: float = 5.0) -> dict[str, Any]:
 
     return result
 # =========================== GeoIP информация ===========================
+
 
 def get_geoip_info(ip: str) -> Dict[str, Any]:
     """Получение геоинформации через несколько API."""
@@ -225,6 +245,7 @@ def get_geoip_info(ip: str) -> Dict[str, Any]:
 
 # =========================== ASN информация ===========================
 
+
 def asn_lookup(ip: str) -> Dict[str, Optional[str]]:
     """Возвращает ASN и провайдера в формате 'nameASN:asn'."""
     asn = None
@@ -242,7 +263,8 @@ def asn_lookup(ip: str) -> Dict[str, Optional[str]]:
                     break
                 resp += chunk
             s.close()
-            lines = [l.strip() for l in resp.decode(errors="ignore").splitlines() if l.strip()]
+            lines = [l.strip() for l in resp.decode(
+                errors="ignore").splitlines() if l.strip()]
             if len(lines) >= 2:
                 cols = [c.strip() for c in lines[-1].split("|")]
                 return cols[0] if cols else None, cols[-1] if len(cols) >= 2 else None
@@ -260,7 +282,8 @@ def asn_lookup(ip: str) -> Dict[str, Optional[str]]:
         asn = parts[0] if parts else None
         if asn:
             try:
-                as_answers = dns.resolver.resolve(f"AS{asn}.asn.cymru.com", "TXT")
+                as_answers = dns.resolver.resolve(
+                    f"AS{asn}.asn.cymru.com", "TXT")
                 as_txt = as_answers[0].to_text().strip('"')
                 as_parts = [p.strip() for p in as_txt.split("|")]
                 provider = as_parts[-1] if as_parts else None
@@ -317,6 +340,7 @@ def asn_lookup(ip: str) -> Dict[str, Optional[str]]:
 
 # =========================== Обработка одного домена ===========================
 
+
 def process_domain(domain: str) -> Dict[str, Any]:
     try:
         puny_domain = idna.encode(domain).decode('ascii')
@@ -335,7 +359,7 @@ def process_domain(domain: str) -> Dict[str, Any]:
 
     # ========== WHOIS (может не получиться, но это не критично) ==========
     whois_data = retry(whois.whois, puny_domain, max_attempts=2, delay=1)
-    
+
     if whois_data:
         try:
             # Проверяем наличие имени домена в ответе
@@ -344,42 +368,43 @@ def process_domain(domain: str) -> Dict[str, Any]:
                 has_domain_info = True
             elif isinstance(whois_data, dict) and whois_data.get('domain_name'):
                 has_domain_info = True
-                
+
             if has_domain_info:
                 # Реальные NS для сравнения
                 resolved_ns = resolve_ns(puny_domain)
-                resolved_ns_norm = {ns.lower().rstrip('.') for ns in resolved_ns if ns}
+                resolved_ns_norm = {ns.lower().rstrip('.')
+                                    for ns in resolved_ns if ns}
 
                 # Добавляем информацию из whois, исключая NS, которые совпадают с реальными
                 fields = [
                     ('registrar', 'Registrar'),
-                    ('registrar_url', 'Registrar URL'), 
+                    ('registrar_url', 'Registrar URL'),
                     ('org', 'Org'),
                     ('updated_date', 'Update Date'),
                     ('creation_date', 'Creation Date'),
                     ('expiration_date', 'Expiration Date')
                 ]
-                
+
                 for attr, label in fields:
                     val = None
                     if hasattr(whois_data, attr):
                         val = getattr(whois_data, attr, None)
                     elif isinstance(whois_data, dict):
                         val = whois_data.get(attr)
-                        
+
                     if val:
                         if 'date' in attr:
                             val = format_date(val)
                         if val:
                             data["whois"].append(f"{label}: {val}")
-                
+
                 # Name servers из whois
                 name_servers = None
                 if hasattr(whois_data, 'name_servers'):
                     name_servers = whois_data.name_servers
                 elif isinstance(whois_data, dict):
                     name_servers = whois_data.get('name_servers')
-                    
+
                 if name_servers:
                     if isinstance(name_servers, str):
                         name_servers = [name_servers]
@@ -392,31 +417,32 @@ def process_domain(domain: str) -> Dict[str, Any]:
                             data["whois"].append(f"Name Server: {ns_norm}")
         except Exception as e:
             print(f"  Ошибка обработки WHOIS данных: {e}")
-    
+
     # ========== DNS информация (выполняется всегда) ==========
-    
+
     # NS записи
     data["ns"] = resolve_ns(puny_domain)
-    
+
     # MX записи
     mx_records = resolve_mx(puny_domain)
-    
+
     # TXT записи
     txt_records = resolve_txt(puny_domain)
-    
+
     data["mail"] = {
         "mx": mx_records,
         "spf": extract_records_by_prefix(txt_records, "v=spf1"),
         "dkim": extract_records_by_prefix(txt_records, "v=dkim1"),
         "dmarc": extract_records_by_prefix(txt_records, "v=dmarc1")
     }
-    
+
     # ========== SSL информация ==========
     data["ssl"] = get_ssl_info(puny_domain)
 
     # ========== IP адреса через разные DNS ==========
-    dns_servers = {"1.1.1.1": "Cloudflare", "8.8.8.8": "Google", "77.88.8.8": "Yandex"}
-    
+    dns_servers = {"1.1.1.1": "Cloudflare",
+                   "8.8.8.8": "Google", "77.88.8.8": "Yandex"}
+
     for dns_ip, provider_name in dns_servers.items():
         ips = resolve_ip_via_dns(puny_domain, dns_ip)
         for ip in ips:
@@ -431,7 +457,7 @@ def process_domain(domain: str) -> Dict[str, Any]:
                 "asn": asn_data.get("asn"),
                 "geoip": geo
             })
-    
+
     # Убираем дубликаты IP
     if data["servers"]:
         unique_servers = []
@@ -441,9 +467,10 @@ def process_domain(domain: str) -> Dict[str, Any]:
                 seen_ips.add(server["ip"])
                 unique_servers.append(server)
         data["servers"] = unique_servers
-    
+
     return data
 # =========================== Красивый вывод ===========================
+
 
 def print_pretty_results(results: Dict[str, Any]):
     for idx, (domain, data) in enumerate(results.items(), 1):
@@ -473,17 +500,17 @@ def print_pretty_results(results: Dict[str, Any]):
             print("\n📧 MX ЗАПИСИ:")
             for rec in mail["mx"]:
                 print(f"  • {rec}")
-        
+
         if mail.get("spf"):
             print("\n🛡️ SPF ЗАПИСИ:")
             for rec in mail["spf"]:
                 print(f"  • {rec}")
-        
+
         if mail.get("dkim"):
             print("\n🔑 DKIM ЗАПИСИ:")
             for rec in mail["dkim"]:
                 print(f"  • {rec}")
-                
+
         if mail.get("dmarc"):
             print("\n📋 DMARC ЗАПИСИ:")
             for rec in mail["dmarc"]:
@@ -526,7 +553,8 @@ def print_pretty_results(results: Dict[str, Any]):
             if issuer_parts:
                 print(f"  • Issuer          : {', '.join(issuer_parts)}")
             else:
-                print(f"  • Issuer          : {ssl_info.get('issuer_cn', 'N/A')}")
+                print(
+                    f"  • Issuer          : {ssl_info.get('issuer_cn', 'N/A')}")
 
             if from_date := ssl_info.get("valid_from"):
                 print(f"  • Действителен с  : {from_date}")
@@ -539,7 +567,8 @@ def print_pretty_results(results: Dict[str, Any]):
                 elif days == 0:
                     print(f"  • Статус          : ❗ истекает сегодня")
                 elif days <= 30:
-                    print(f"  • Статус          : ⚠️ истекает через {days} дней")
+                    print(
+                        f"  • Статус          : ⚠️ истекает через {days} дней")
                 else:
                     print(f"  • Статус          : ✅ ещё {days} дней")
         else:
@@ -554,12 +583,14 @@ def process_domains(domains: List[str]):
         results = dict(zip(domains, executor.map(process_domain, domains)))
     print_pretty_results(results)
 
+
 def main():
     if len(sys.argv) < 2:
         print("Использование: python main.py [домен1] [домен2] ...")
         sys.exit(1)
     domains = sys.argv[1:]
     process_domains(domains)
+
 
 if __name__ == "__main__":
     main()
