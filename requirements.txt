@@ -1,5 +1,4 @@
 python-whois
 cryptography
 dnspython
-aiohttp
 idna

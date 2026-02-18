@@ -9,10 +9,10 @@ import idna
 import whois
 
 from utils import retry, format_date
-from dns_utils import resolve_ns, resolve_mx, resolve_txt, extract_records_by_prefix, resolve_ip_via_dns, get_ptr
+from dns_utils import resolve_ns, resolve_mx, resolve_txt, extract_records_by_prefix, resolve_ip_via_dns, get_ptr, parse_spf, format_spf_parsed
 from ssl_utils import get_ssl_info
 from network_utils import asn_lookup
-from geoip_utils import get_geoip_info
+
 
 
 # DNS серверы для резолва
@@ -90,19 +90,15 @@ def get_whois_data(puny_domain: str) -> Dict[str, Any]:
 
 def process_server_info(ip: str, provider_name: str) -> Dict[str, Any]:
     """Обработка информации о сервере (IP) - для параллельного выполнения."""
-    # Все три операции независимы, но для простоты выполняем последовательно
-    # (их можно распараллелить еще сильнее если нужно)
     ptr = get_ptr(ip)
     asn_data = asn_lookup(ip)
-    geo = get_geoip_info(ip)
     
     return {
         "resolver": provider_name,
         "ip": ip,
         "ptr": ptr,
-        "provider": asn_data.get("provider"),
-        "asn": asn_data.get("asn"),
-        "geoip": geo
+        "provider_raw": asn_data.get("provider_raw"),
+        "asn_country": asn_data.get("country")
     }
 
 
@@ -164,9 +160,13 @@ def process_domain(domain: str) -> Dict[str, Any]:
                 data["whois"].append(f"Name Server: {ns}")
         
         # Обработка почтовых записей
+        spf_records = extract_records_by_prefix(txt_records, "v=spf1")
+        spf_parsed = [parse_spf(rec) for rec in spf_records]
+        
         data["mail"] = {
             "mx": mx_records,
-            "spf": extract_records_by_prefix(txt_records, "v=spf1"),
+            "spf": spf_records,
+            "spf_parsed": spf_parsed,
             "dkim": extract_records_by_prefix(txt_records, "v=dkim1"),
             "dmarc": extract_records_by_prefix(txt_records, "v=dmarc1")
         }
@@ -237,10 +237,12 @@ def print_pretty_results(results: Dict[str, Any]):
             for rec in mail["mx"]:
                 print(f"  • {rec}")
 
-        if mail.get("spf"):
+        if mail.get("spf_parsed"):
             print("\n🛡️ SPF ЗАПИСИ:")
-            for rec in mail["spf"]:
-                print(f"  • {rec}")
+            for idx, parsed in enumerate(mail["spf_parsed"], 1):
+                if len(mail["spf_parsed"]) > 1:
+                    print(f"\n    Запись #{idx}:")
+                print(format_spf_parsed(parsed))
 
         if mail.get("dkim"):
             print("\n🔑 DKIM ЗАПИСИ:")
@@ -257,15 +259,17 @@ def print_pretty_results(results: Dict[str, Any]):
             print("\n🖥️ IP АДРЕСА И ПРОВАЙДЕРЫ:")
             for server in data["servers"]:
                 print(f"\n    IP : {server['ip']}")
+                # PTR
                 if server.get("ptr"):
                     print(f"    PTR: {server['ptr']}")
-                if server.get("provider"):
-                    if "NON-RIPE-NCC-MANAGED-ADDRESS-BLOCKASN" not in server["provider"]:
-                        print(f"    ASN: {server['provider']}")
-                if server.get("geoip", {}).get("isp") and server["geoip"]["isp"] != "N/A":
-                    print(f"    ISP: {server['geoip']['isp']}")
-                if server.get("geoip", {}).get("country") and server["geoip"]["country"] != "N/A":
-                    print(f"    LOC: {server['geoip']['country']}")
+                # ISP - информация о провайдере (org-name + country)
+                provider_raw = server.get("provider_raw")
+                if provider_raw and "NON-RIPE-NCC-MANAGED-ADDRESS-BLOCK" not in provider_raw:
+                    print(f"    ISP: {provider_raw}")
+                # Country (LOC) - из whois, если нет - из geoip
+                country = server.get("asn_country")
+                if not country and server.get("geoip", {}).get("country") and server["geoip"]["country"] != "N/A":
+                    country = server["geoip"]["country"]
 
         # SSL
         ssl_info = data.get("ssl", {})
