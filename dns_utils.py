@@ -178,7 +178,7 @@ def format_spf_parsed(parsed: Dict[str, Any]) -> str:
             "?": ("❓", "NEUTRAL")
         }
         icon, text = qualifier_map.get(policy["qualifier"], ("❓", "UNKNOWN"))
-        lines.append(f"\n  • Политика по умолчанию: {icon} {text} (все остальные)")
+        lines.append(f"\n  • Политика по умолчанию: {icon} {text}")
     
     # Группировка механизмов
     mech_groups = {}
