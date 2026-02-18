@@ -178,7 +178,7 @@ def format_spf_parsed(parsed: Dict[str, Any]) -> str:
             "?": ("❓", "NEUTRAL")
         }
         icon, text = qualifier_map.get(policy["qualifier"], ("❓", "UNKNOWN"))
-        lines.append(f"\n    Политика по умолчанию: {icon} {text} (все остальные)")
+        lines.append(f"\n  • Политика по умолчанию: {icon} {text} (все остальные)")
     
     # Группировка механизмов
     mech_groups = {}
@@ -190,29 +190,29 @@ def format_spf_parsed(parsed: Dict[str, Any]) -> str:
     
     # Вывод по группам
     type_names = {
-        "ip4": " IPv4 адреса/сети",
-        "ip6": " IPv6 адреса/сети", 
-        "a": " A-записи",
-        "mx": " MX-записи",
-        "include": " Включённые SPF",
-        "exists": " Exists проверки",
-        "ptr": " PTR проверки"
+        "ip4": "• IPv4 адреса/сети",
+        "ip6": "• IPv6 адреса/сети", 
+        "a": "• A-записи",
+        "mx": "• MX-записи",
+        "include": "• Включённые SPF",
+        "exists": "• Exists проверки",
+        "ptr": "• PTR проверки"
     }
     
     qualifier_icons = {"+": "✓", "-": "✗", "~": "~", "?": "?"}
     
     for mtype in ["include", "ip4", "ip6", "a", "mx", "exists", "ptr"]:
         if mtype in mech_groups:
-            lines.append(f"\n   {type_names.get(mtype, mtype)}:")
+            lines.append(f"\n  {type_names.get(mtype, mtype)}:")
             for mech in mech_groups[mtype]:
                 icon = qualifier_icons.get(mech["qualifier"], "✓")
                 value = mech["value"] or "(текущий домен)"
-                lines.append(f"      {icon} {value}")
+                lines.append(f"     {icon} {value}")
     
     # Модификаторы
     if parsed.get("modifiers"):
-        lines.append(f"\n      ⚙️ Модификаторы:")
+        lines.append(f"\n    Модификаторы:")
         for mod in parsed["modifiers"]:
-            lines.append(f"        • {mod['name']}={mod['value']}")
+            lines.append(f"   • {mod['name']}={mod['value']}")
     
     return "\n".join(lines)

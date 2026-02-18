@@ -216,49 +216,49 @@ def print_pretty_results(results: Dict[str, Any]):
 
         # WHOIS
         if data.get("whois"):
-            print("\n📋 WHOIS ИНФОРМАЦИЯ:")
+            print("\nWHOIS ИНФОРМАЦИЯ:\n")
             for item in data["whois"]:
                 print(f"  • {item}")
         else:
-            print("\n📋 WHOIS: информация не получена (возможно скрыта регистратором)")
+            print("\nWHOIS: информация не получена (возможно скрыта регистратором)")
 
         # NS
         if data.get("ns"):
-            print("\n🌐 NS СЕРВЕРЫ:")
+            print("\nNS СЕРВЕРЫ:\n")
             for ns in data["ns"]:
                 print(f"  • {ns}")
         else:
-            print("\n🌐 NS: не найдены")
+            print("\nNS: не найдены")
 
         # Почта
         mail = data.get("mail", {})
         if mail.get("mx"):
-            print("\n📧 MX ЗАПИСИ:")
+            print("\nMX ЗАПИСИ:\n")
             for rec in mail["mx"]:
                 print(f"  • {rec}")
 
         if mail.get("spf_parsed"):
-            print("\n🛡️ SPF ЗАПИСИ:")
+            print("\nSPF ЗАПИСИ:")
             for idx, parsed in enumerate(mail["spf_parsed"], 1):
                 if len(mail["spf_parsed"]) > 1:
                     print(f"\n    Запись #{idx}:")
                 print(format_spf_parsed(parsed))
 
         if mail.get("dkim"):
-            print("\n🔑 DKIM ЗАПИСИ:")
+            print("\nDKIM ЗАПИСИ:\n")
             for rec in mail["dkim"]:
                 print(f"  • {rec}")
 
         if mail.get("dmarc"):
-            print("\n📋 DMARC ЗАПИСИ:")
+            print("\nDMARC ЗАПИСИ:\n")
             for rec in mail["dmarc"]:
                 print(f"  • {rec}")
 
         # Серверы (IP)
         if data.get("servers"):
-            print("\n🖥️ IP АДРЕСА И ПРОВАЙДЕРЫ:")
+            print("\nIP АДРЕСА И ПРОВАЙДЕРЫ:")
             for server in data["servers"]:
-                print(f"\n    IP : {server['ip']}")
+                print(f"\n  • IP : {server['ip']}")
                 # PTR
                 if server.get("ptr"):
                     print(f"    PTR: {server['ptr']}")
@@ -274,9 +274,9 @@ def print_pretty_results(results: Dict[str, Any]):
         # SSL
         ssl_info = data.get("ssl", {})
         if "error" in ssl_info:
-            print(f"\n🔒 SSL: ошибка → {ssl_info['error']}")
+            print(f"\nSSL: ошибка → {ssl_info['error']}")
         elif ssl_info:
-            print("\n🔒 SSL СЕРТИФИКАТ:")
+            print("\nSSL СЕРТИФИКАТ:\n")
             if subject := ssl_info.get("subject_cn"):
                 print(f"  • Common Name     : {subject}")
 
@@ -310,10 +310,9 @@ def print_pretty_results(results: Dict[str, Any]):
                     print(
                         f"  • Статус          : ⚠️ истекает через {days} дней")
                 else:
-                    print(f"  • Статус          : ✅ ещё {days} дней")
+                    print(f"  • Статус          : ещё {days} дней")
         else:
-            print("\n🔒 SSL: нет данных")
-
+            print("\nSSL: нет данных")
 
 def process_domains(domains: List[str]):
     """Основная функция обработки списка доменов."""  
@@ -330,7 +329,6 @@ def main():
         sys.exit(1)
     domains = sys.argv[1:]
     process_domains(domains)
-
 
 if __name__ == "__main__":
     main()
