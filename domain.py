@@ -265,7 +265,7 @@ def print_pretty_results(results: Dict[str, Any]):
                 # ISP - информация о провайдере (org-name + country)
                 provider_raw = server.get("provider_raw")
                 if provider_raw and "NON-RIPE-NCC-MANAGED-ADDRESS-BLOCK" not in provider_raw:
-                    print(f"    ISP: {provider_raw}")
+                    print(f"    {provider_raw}")
                 # Country (LOC) - из whois, если нет - из geoip
                 country = server.get("asn_country")
                 if not country and server.get("geoip", {}).get("country") and server["geoip"]["country"] != "N/A":
