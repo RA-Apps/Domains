@@ -1,6 +1,5 @@
 """DNS утилиты (оптимизированные с таймаутами)."""
 
-import re
 from typing import List, Optional, Dict, Any
 import dns.resolver
 import dns.reversename
@@ -179,7 +178,7 @@ def format_spf_parsed(parsed: Dict[str, Any]) -> str:
             "?": ("❓", "NEUTRAL")
         }
         icon, text = qualifier_map.get(policy["qualifier"], ("❓", "UNKNOWN"))
-        lines.append(f"    Политика по умолчанию: {icon} {text} (все остальные)")
+        lines.append(f"\n    Политика по умолчанию: {icon} {text} (все остальные)")
     
     # Группировка механизмов
     mech_groups = {}

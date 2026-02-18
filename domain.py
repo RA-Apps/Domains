@@ -316,9 +316,7 @@ def print_pretty_results(results: Dict[str, Any]):
 
 
 def process_domains(domains: List[str]):
-    """Основная функция обработки списка доменов."""
-    print(f"\n🚀 Начинаем обработку {len(domains)} доменов...\n")
-    
+    """Основная функция обработки списка доменов."""  
     # Увеличиваем количество workers для параллельной обработки доменов
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         results = dict(zip(domains, executor.map(process_domain, domains)))
