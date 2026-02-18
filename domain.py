@@ -9,7 +9,7 @@ import idna
 import whois
 
 from utils import retry, format_date
-from dns_utils import resolve_ns, resolve_mx, resolve_txt, extract_records_by_prefix, resolve_ip_via_dns, get_ptr, parse_spf, format_spf_parsed, resolve_dkim
+from dns_utils import resolve_ns, resolve_mx, resolve_txt, extract_records_by_prefix, resolve_ip_via_dns, get_ptr, parse_spf, format_spf_parsed, resolve_dkim, resolve_dmarc, parse_dmarc, format_dmarc_parsed
 from ssl_utils import get_ssl_info
 from network_utils import asn_lookup, scan_ports, COMMON_PORTS
 
@@ -135,6 +135,7 @@ def process_domain(domain: str, scan_ports_flag: bool = False, custom_ports: Opt
         future_mx = executor.submit(resolve_mx, puny_domain)
         future_txt = executor.submit(resolve_txt, puny_domain)
         future_dkim = executor.submit(resolve_dkim, puny_domain)
+        future_dmarc = executor.submit(resolve_dmarc, puny_domain)
         future_ssl = executor.submit(get_ssl_info, puny_domain)
         
         # 2. Резолв IP через разные DNS серверы параллельно
@@ -148,6 +149,7 @@ def process_domain(domain: str, scan_ports_flag: bool = False, custom_ports: Opt
         mx_records = future_mx.result()
         txt_records = future_txt.result()
         dkim_records = future_dkim.result()
+        dmarc_records = future_dmarc.result()
         data["ssl"] = future_ssl.result()
         
         # Обработка WHOIS
@@ -166,12 +168,16 @@ def process_domain(domain: str, scan_ports_flag: bool = False, custom_ports: Opt
         spf_records = extract_records_by_prefix(txt_records, "v=spf1")
         spf_parsed = [parse_spf(rec) for rec in spf_records]
         
+        # Парсим DMARC записи
+        dmarc_parsed = [parse_dmarc(rec) for rec in dmarc_records]
+        
         data["mail"] = {
             "mx": mx_records,
             "spf": spf_records,
             "spf_parsed": spf_parsed,
             "dkim": dkim_records,
-            "dmarc": extract_records_by_prefix(txt_records, "v=dmarc1")
+            "dmarc": dmarc_records,
+            "dmarc_parsed": dmarc_parsed
         }
         
         # 3. Собираем все IP адреса
@@ -268,10 +274,10 @@ def print_pretty_results(results: Dict[str, Any]):
                 else:
                     print(f"  • {rec}")
 
-        if mail.get("dmarc"):
-            print("\nDMARC ЗАПИСИ:\n")
-            for rec in mail["dmarc"]:
-                print(f"  • {rec}")
+        if mail.get("dmarc_parsed"):
+            print("\nDMARC ЗАПИСИ:")
+            for parsed in mail["dmarc_parsed"]:
+                print(format_dmarc_parsed(parsed))
 
         # Серверы (IP)
         if data.get("servers"):

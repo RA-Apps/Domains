@@ -54,6 +54,33 @@ def extract_records_by_prefix(txt_records: List[str], prefix: str) -> List[str]:
     return [rec for rec in txt_records if rec.lower().startswith(prefix.lower())]
 
 
+def resolve_dmarc(domain: str) -> List[str]:
+    """
+    Получает DMARC запись для домена с _dmarc.{домен}.
+    
+    Args:
+        domain: Домен для проверки
+    
+    Returns:
+        Список DMARC записей (обычно одна)
+    """
+    dmarc_domain = f"_dmarc.{domain}"
+    try:
+        answers = _resolver.resolve(dmarc_domain, "TXT", lifetime=3)
+        dmarc_records = []
+        for r in answers:
+            if not getattr(r, "strings", None):
+                continue
+            parts = [part.decode() if hasattr(part, "decode") else str(part)
+                     for part in r.strings]
+            record = "".join(parts)
+            if record.lower().startswith("v=dmarc1"):
+                dmarc_records.append(record)
+        return dmarc_records
+    except Exception:
+        return []
+
+
 # Стандартные DKIM селекторы для проверки
 DKIM_SELECTORS = [
     "mail", "default", "dkim", "google", "selector1", "selector2", 
@@ -272,5 +299,152 @@ def format_spf_parsed(parsed: Dict[str, Any]) -> str:
         lines.append(f"\n    Модификаторы:")
         for mod in parsed["modifiers"]:
             lines.append(f"   • {mod['name']}={mod['value']}")
+    
+    return "\n".join(lines)
+
+
+def parse_dmarc(dmarc_record: str) -> Dict[str, Any]:
+    """
+    Парсит DMARC запись в структурированный формат.
+    
+    Args:
+        dmarc_record: Строка DMARC записи
+        
+    Returns:
+        {
+            "raw": "v=DMARC1; p=reject; ...",
+            "version": "DMARC1",
+            "policy": "reject",           # p: none, quarantine, reject
+            "subdomain_policy": None,     # sp: none, quarantine, reject
+            "pct": 100,                   # процент писем (0-100)
+            "rua": [],                    # адреса для агрегированных отчетов
+            "ruf": [],                    # адреса для forensic отчетов
+            "adkim": "r",                 # выравнивание DKIM: r/relaxed, s/strict
+            "aspf": "r",                  # выравнивание SPF: r/relaxed, s/strict
+            "rf": "afrf",                 # формат forensic отчетов
+            "ri": 86400,                  # интервал отчетов в секундах
+            "fo": "0"                     # опции forensic отчетов
+        }
+    """
+    result = {
+        "raw": dmarc_record,
+        "version": None,
+        "policy": None,
+        "subdomain_policy": None,
+        "pct": 100,
+        "rua": [],
+        "ruf": [],
+        "adkim": "r",
+        "aspf": "r",
+        "rf": "afrf",
+        "ri": 86400,
+        "fo": "0"
+    }
+    
+    if not dmarc_record:
+        return result
+    
+    # Разбиваем по точке с запятой
+    parts = [p.strip() for p in dmarc_record.split(";") if p.strip()]
+    
+    for part in parts:
+        if "=" not in part:
+            continue
+        
+        key, value = part.split("=", 1)
+        key = key.lower().strip()
+        value = value.strip()
+        
+        if key == "v":
+            result["version"] = value
+        elif key == "p":
+            result["policy"] = value.lower()
+        elif key == "sp":
+            result["subdomain_policy"] = value.lower()
+        elif key == "pct":
+            try:
+                result["pct"] = int(value)
+            except ValueError:
+                result["pct"] = 100
+        elif key == "rua":
+            # Может быть несколько адресов через запятую
+            result["rua"] = [a.strip() for a in value.split(",") if a.strip()]
+        elif key == "ruf":
+            result["ruf"] = [a.strip() for a in value.split(",") if a.strip()]
+        elif key == "adkim":
+            result["adkim"] = value.lower()
+        elif key == "aspf":
+            result["aspf"] = value.lower()
+        elif key == "rf":
+            result["rf"] = value.lower()
+        elif key == "ri":
+            try:
+                result["ri"] = int(value)
+            except ValueError:
+                result["ri"] = 86400
+        elif key == "fo":
+            result["fo"] = value
+    
+    return result
+
+
+def format_dmarc_parsed(parsed: Dict[str, Any]) -> str:
+    """Форматирует распарсенную DMARC запись в красивый текст."""
+    lines = []
+    
+    # Основная политика
+    policy_icons = {
+        "none": ("❓", "NONE (мониторинг)"),
+        "quarantine": ("⚠️", "QUARANTINE (карантин)"),
+        "reject": ("❌", "REJECT (отклонение)")
+    }
+    
+    if parsed.get("policy"):
+        icon, text = policy_icons.get(parsed["policy"], ("❓", parsed["policy"].upper()))
+        lines.append(f"\n  • Политика: {icon} {text}")
+    
+    # Политика для субдоменов
+    if parsed.get("subdomain_policy"):
+        icon, text = policy_icons.get(parsed["subdomain_policy"], ("❓", parsed["subdomain_policy"].upper()))
+        lines.append(f"  • Политика для субдоменов: {icon} {text}")
+    
+    # Процент
+    pct = parsed.get("pct", 100)
+    if pct != 100:
+        lines.append(f"  • Применяется к: {pct}% писем")
+    
+    # Выравнивание
+    align_names = {"r": "relaxed (мягкое)", "s": "strict (строгое)"}
+    lines.append(f"  • Выравнивание DKIM: {align_names.get(parsed.get('adkim', 'r'), parsed.get('adkim', 'r'))}")
+    lines.append(f"  • Выравнивание SPF: {align_names.get(parsed.get('aspf', 'r'), parsed.get('aspf', 'r'))}")
+    
+    # Адреса для отчетов
+    if parsed.get("rua"):
+        lines.append(f"\n  • Агрегированные отчеты (rua):")
+        for addr in parsed["rua"]:
+            lines.append(f"    → {addr}")
+    
+    if parsed.get("ruf"):
+        lines.append(f"  • Forensic отчеты (ruf):")
+        for addr in parsed["ruf"]:
+            lines.append(f"    → {addr}")
+    
+    # Интервал отчетов
+    ri = parsed.get("ri", 86400)
+    if ri != 86400:
+        hours = ri // 3600
+        lines.append(f"  • Интервал отчетов: {hours} ч")
+    
+    # Опции forensic
+    if parsed.get("fo") and parsed.get("fo") != "0":
+        fo_options = {
+            "0": "только если все механизмы не прошли",
+            "1": "если любой механизм не прошел",
+            "d": "если DKIM не прошел",
+            "s": "если SPF не прошел"
+        }
+        fo_parts = parsed["fo"].split(":")
+        fo_desc = [fo_options.get(f, f) for f in fo_parts]
+        lines.append(f"  • Отправлять forensic отчеты: {', '.join(fo_desc)}")
     
     return "\n".join(lines)
