@@ -2,7 +2,7 @@
 
 import sys
 import concurrent.futures
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from functools import partial
 
 import idna
@@ -108,7 +108,7 @@ def resolve_ip_parallel(puny_domain: str, dns_ip: str, provider_name: str) -> Li
     return [(ip, provider_name) for ip in ips]
 
 
-def process_domain(domain: str) -> Dict[str, Any]:
+def process_domain(domain: str, scan_ports_flag: bool = False, custom_ports: Optional[List[int]] = None) -> Dict[str, Any]:
     """Обработка одного домена - сбор всей информации (оптимизированная)."""
     try:
         puny_domain = idna.encode(domain).decode('ascii')
@@ -209,10 +209,11 @@ def process_domain(domain: str) -> Dict[str, Any]:
                 unique_ips.append(server["ip"])
         data["servers"] = unique_servers
     
-    # Сканирование портов только для первого IP
-    if unique_ips:
+    # Сканирование портов только для первого IP (если включено)
+    if scan_ports_flag and unique_ips:
         first_ip = unique_ips[0]
-        open_ports = scan_ports(first_ip, COMMON_PORTS, timeout=0.8)
+        ports_to_scan = custom_ports if custom_ports else COMMON_PORTS
+        open_ports = scan_ports(first_ip, ports_to_scan, timeout=0.8)
         if open_ports:
             data["open_ports"][first_ip] = open_ports
 
@@ -340,21 +341,68 @@ def print_pretty_results(results: Dict[str, Any]):
         else:
             print("\nSSL: нет данных")
 
-def process_domains(domains: List[str]):
+def process_domains(domains: List[str], scan_ports_flag: bool = False, custom_ports: Optional[List[int]] = None):
     """Основная функция обработки списка доменов."""  
     # Увеличиваем количество workers для параллельной обработки доменов
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        results = dict(zip(domains, executor.map(process_domain, domains)))
+        results = dict(zip(domains, executor.map(
+            lambda d: process_domain(d, scan_ports_flag, custom_ports), domains)))
     
     print_pretty_results(results)
 
 
+def parse_args(args: List[str]) -> tuple:
+    """Парсит аргументы командной строки.
+    
+    Returns:
+        (domains, scan_ports_flag, custom_ports)
+    """
+    domains = []
+    scan_ports_flag = False
+    custom_ports = []
+    
+    i = 0
+    while i < len(args):
+        if args[i] == '-p':
+            scan_ports_flag = True
+            # Собираем порты после -p до следующего флага или конца
+            i += 1
+            while i < len(args) and not args[i].startswith('-'):
+                try:
+                    port = int(args[i])
+                    if 1 <= port <= 65535:
+                        custom_ports.append(port)
+                    else:
+                        print(f"Предупреждение: порт {port} вне диапазона 1-65535, пропускаем")
+                except ValueError:
+                    # Если не число, считаем это доменом
+                    domains.append(args[i])
+                i += 1
+        else:
+            domains.append(args[i])
+            i += 1
+    
+    return domains, scan_ports_flag, custom_ports if custom_ports else None
+
+
 def main():
     if len(sys.argv) < 2:
-        print("Использование: python domain.py [домен1] [домен2] ...")
+        print("Использование: python domain.py [домен1] [домен2] ... [-p [порт1 порт2 ...]]")
+        print("Примеры:")
+        print("  python domain.py example.com")
+        print("  python domain.py example.com -p")
+        print("  python domain.py example.com -p 9090 4141")
         sys.exit(1)
-    domains = sys.argv[1:]
-    process_domains(domains)
+    
+    domains, scan_ports_flag, custom_ports = parse_args(sys.argv[1:])
+    
+    if not domains:
+        print("Ошибка: не указаны домены")
+        sys.exit(1)
+    
+    process_domains(domains, scan_ports_flag, custom_ports)
     print("")
+
+
 if __name__ == "__main__":
     main()
