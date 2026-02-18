@@ -1,48 +1,90 @@
-"""GeoIP утилиты."""
+"""GeoIP утилиты (оптимизированные с кэшированием и асинхронностью)."""
 
-from typing import Dict, Any
+import asyncio
+from typing import Dict, Any, Optional
+from functools import lru_cache
 
-import requests
+import aiohttp
 
 
-def get_geoip_info(ip: str) -> Dict[str, Any]:
-    """Получение геоинформации через несколько API."""
+async def _fetch_geoip(session: aiohttp.ClientSession, url: str) -> Optional[Dict]:
+    """Асинхронный запрос к GeoIP API."""
+    try:
+        async with session.get(url) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                if data.get('status') != 'fail':
+                    return data
+    except Exception:
+        pass
+    return None
+
+
+def _map_ipapi(data: Dict) -> Dict[str, Any]:
+    """Маппер для ip-api.com."""
+    return {
+        "country": data.get('country', 'N/A'),
+        "country_code": data.get('countryCode', 'N/A'),
+        "region": data.get('regionName', 'N/A'),
+        "city": data.get('city', 'N/A'),
+        "zip": data.get('zip', 'N/A'),
+        "lat": data.get('lat', 'N/A'),
+        "lon": data.get('lon', 'N/A'),
+        "timezone": data.get('timezone', 'N/A'),
+        "isp": data.get('isp', 'N/A'),
+        "org": data.get('org', 'N/A')
+    }
+
+
+def _map_ipapico(data: Dict) -> Dict[str, Any]:
+    """Маппер для ipapi.co."""
+    return {
+        "country": data.get('country_name', 'N/A'),
+        "country_code": data.get('country_code', 'N/A'),
+        "region": data.get('region', 'N/A'),
+        "city": data.get('city', 'N/A'),
+        "zip": data.get('postal', 'N/A'),
+        "lat": data.get('latitude', 'N/A'),
+        "lon": data.get('longitude', 'N/A'),
+        "timezone": data.get('timezone', 'N/A'),
+        "isp": data.get('org', 'N/A'),
+        "org": data.get('org', 'N/A')
+    }
+
+
+async def _get_geoip_info_async(ip: str) -> Dict[str, Any]:
+    """Асинхронное получение геоинформации."""
     apis = [
-        ("http://ip-api.com/json/{}", lambda d: {
-            "country": d.get('country', 'N/A'),
-            "country_code": d.get('countryCode', 'N/A'),
-            "region": d.get('regionName', 'N/A'),
-            "city": d.get('city', 'N/A'),
-            "zip": d.get('zip', 'N/A'),
-            "lat": d.get('lat', 'N/A'),
-            "lon": d.get('lon', 'N/A'),
-            "timezone": d.get('timezone', 'N/A'),
-            "isp": d.get('isp', 'N/A'),
-            "org": d.get('org', 'N/A')
-        }),
-        ("https://ipapi.co/{}/json/", lambda d: {
-            "country": d.get('country_name', 'N/A'),
-            "country_code": d.get('country_code', 'N/A'),
-            "region": d.get('region', 'N/A'),
-            "city": d.get('city', 'N/A'),
-            "zip": d.get('postal', 'N/A'),
-            "lat": d.get('latitude', 'N/A'),
-            "lon": d.get('longitude', 'N/A'),
-            "timezone": d.get('timezone', 'N/A'),
-            "isp": d.get('org', 'N/A'),
-            "org": d.get('org', 'N/A')
-        })
+        (f"http://ip-api.com/json/{ip}", _map_ipapi),
+        (f"https://ipapi.co/{ip}/json/", _map_ipapico),
     ]
-
-    for url_template, mapper in apis:
-        try:
-            resp = requests.get(url_template.format(ip), timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get('status') != 'fail':  # для ip-api.com успех имеет status='success'
-                    return mapper(data)
-        except Exception as e:
-            print(f"GeoIP error ({url_template}): {e}")
-            continue
-
+    
+    # Создаём сессию с ограничениями и таймаутом
+    timeout = aiohttp.ClientTimeout(total=5, connect=2)
+    connector = aiohttp.TCPConnector(
+        limit=10,
+        limit_per_host=5,
+        ttl_dns_cache=300,
+        use_dns_cache=True,
+    )
+    
+    async with aiohttp.ClientSession(
+        connector=connector,
+        timeout=timeout
+    ) as session:
+        # Запрашиваем все API параллельно, берем первый успешный
+        tasks = [_fetch_geoip(session, url) for url, _ in apis]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for (url, mapper), data in zip(apis, results):
+            if isinstance(data, dict):
+                return mapper(data)
+    
     return {k: "N/A" for k in ["country", "country_code", "region", "city", "zip", "lat", "lon", "timezone", "isp", "org"]}
+
+
+# Синхронная обертка с кэшированием
+@lru_cache(maxsize=512)
+def get_geoip_info(ip: str) -> Dict[str, Any]:
+    """Получение геоинформации (с кэшированием)."""
+    return asyncio.run(_get_geoip_info_async(ip))

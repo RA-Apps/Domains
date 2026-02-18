@@ -1,8 +1,9 @@
-"""Основной модуль для анализа доменов."""
+"""Основной модуль для анализа доменов (оптимизированный)."""
 
 import sys
 import concurrent.futures
 from typing import List, Dict, Any
+from functools import partial
 
 import idna
 import whois
@@ -22,8 +23,97 @@ DNS_SERVERS = {
 }
 
 
+def get_whois_data(puny_domain: str) -> Dict[str, Any]:
+    """Получение WHOIS данных (вынесено для параллельного выполнения)."""
+    whois_data = retry(whois.whois, puny_domain, max_attempts=2, delay=1)
+    result = {
+        "whois_items": [],
+        "name_servers": set()
+    }
+    
+    if not whois_data:
+        return result
+        
+    try:
+        # Проверяем наличие имени домена в ответе
+        has_domain_info = False
+        if hasattr(whois_data, 'domain_name') and whois_data.domain_name:
+            has_domain_info = True
+        elif isinstance(whois_data, dict) and whois_data.get('domain_name'):
+            has_domain_info = True
+
+        if has_domain_info:
+            fields = [
+                ('registrar', 'Registrar'),
+                ('registrar_url', 'Registrar URL'),
+                ('org', 'Org'),
+                ('updated_date', 'Update Date'),
+                ('creation_date', 'Creation Date'),
+                ('expiration_date', 'Expiration Date')
+            ]
+
+            for attr, label in fields:
+                val = None
+                if hasattr(whois_data, attr):
+                    val = getattr(whois_data, attr, None)
+                elif isinstance(whois_data, dict):
+                    val = whois_data.get(attr)
+
+                if val:
+                    if 'date' in attr:
+                        val = format_date(val)
+                    if val:
+                        result["whois_items"].append(f"{label}: {val}")
+
+            # Name servers из whois
+            name_servers = None
+            if hasattr(whois_data, 'name_servers'):
+                name_servers = whois_data.name_servers
+            elif isinstance(whois_data, dict):
+                name_servers = whois_data.get('name_servers')
+
+            if name_servers:
+                if isinstance(name_servers, str):
+                    name_servers = [name_servers]
+                for ns in name_servers:
+                    try:
+                        ns_norm = ns.lower().rstrip('.')
+                        if ns_norm:
+                            result["name_servers"].add(ns_norm)
+                    except Exception:
+                        continue
+    except Exception as e:
+        print(f"  Ошибка обработки WHOIS данных: {e}")
+    
+    return result
+
+
+def process_server_info(ip: str, provider_name: str) -> Dict[str, Any]:
+    """Обработка информации о сервере (IP) - для параллельного выполнения."""
+    # Все три операции независимы, но для простоты выполняем последовательно
+    # (их можно распараллелить еще сильнее если нужно)
+    ptr = get_ptr(ip)
+    asn_data = asn_lookup(ip)
+    geo = get_geoip_info(ip)
+    
+    return {
+        "resolver": provider_name,
+        "ip": ip,
+        "ptr": ptr,
+        "provider": asn_data.get("provider"),
+        "asn": asn_data.get("asn"),
+        "geoip": geo
+    }
+
+
+def resolve_ip_parallel(puny_domain: str, dns_ip: str, provider_name: str) -> List[Dict[str, Any]]:
+    """Резолв IP через конкретный DNS сервер."""
+    ips = resolve_ip_via_dns(puny_domain, dns_ip)
+    return [(ip, provider_name) for ip in ips]
+
+
 def process_domain(domain: str) -> Dict[str, Any]:
-    """Обработка одного домена - сбор всей информации."""
+    """Обработка одного домена - сбор всей информации (оптимизированная)."""
     try:
         puny_domain = idna.encode(domain).decode('ascii')
     except Exception as e:
@@ -39,105 +129,72 @@ def process_domain(domain: str) -> Dict[str, Any]:
         "ssl": {}
     }
 
-    # ========== WHOIS (может не получиться, но это не критично) ==========
-    whois_data = retry(whois.whois, puny_domain, max_attempts=2, delay=1)
-
-    if whois_data:
-        try:
-            # Проверяем наличие имени домена в ответе
-            has_domain_info = False
-            if hasattr(whois_data, 'domain_name') and whois_data.domain_name:
-                has_domain_info = True
-            elif isinstance(whois_data, dict) and whois_data.get('domain_name'):
-                has_domain_info = True
-
-            if has_domain_info:
-                # Реальные NS для сравнения
-                resolved_ns = resolve_ns(puny_domain)
-                resolved_ns_norm = {ns.lower().rstrip('.')
-                                    for ns in resolved_ns if ns}
-
-                # Добавляем информацию из whois, исключая NS, которые совпадают с реальными
-                fields = [
-                    ('registrar', 'Registrar'),
-                    ('registrar_url', 'Registrar URL'),
-                    ('org', 'Org'),
-                    ('updated_date', 'Update Date'),
-                    ('creation_date', 'Creation Date'),
-                    ('expiration_date', 'Expiration Date')
-                ]
-
-                for attr, label in fields:
-                    val = None
-                    if hasattr(whois_data, attr):
-                        val = getattr(whois_data, attr, None)
-                    elif isinstance(whois_data, dict):
-                        val = whois_data.get(attr)
-
-                    if val:
-                        if 'date' in attr:
-                            val = format_date(val)
-                        if val:
-                            data["whois"].append(f"{label}: {val}")
-
-                # Name servers из whois
-                name_servers = None
-                if hasattr(whois_data, 'name_servers'):
-                    name_servers = whois_data.name_servers
-                elif isinstance(whois_data, dict):
-                    name_servers = whois_data.get('name_servers')
-
-                if name_servers:
-                    if isinstance(name_servers, str):
-                        name_servers = [name_servers]
-                    for ns in name_servers or []:
-                        try:
-                            ns_norm = ns.lower().rstrip('.')
-                        except Exception:
-                            continue
-                        if ns_norm and ns_norm not in resolved_ns_norm:
-                            data["whois"].append(f"Name Server: {ns_norm}")
-        except Exception as e:
-            print(f"  Ошибка обработки WHOIS данных: {e}")
-
-    # ========== DNS информация (выполняется всегда) ==========
-
-    # NS записи
-    data["ns"] = resolve_ns(puny_domain)
-
-    # MX записи
-    mx_records = resolve_mx(puny_domain)
-
-    # TXT записи
-    txt_records = resolve_txt(puny_domain)
-
-    data["mail"] = {
-        "mx": mx_records,
-        "spf": extract_records_by_prefix(txt_records, "v=spf1"),
-        "dkim": extract_records_by_prefix(txt_records, "v=dkim1"),
-        "dmarc": extract_records_by_prefix(txt_records, "v=dmarc1")
-    }
-
-    # ========== SSL информация ==========
-    data["ssl"] = get_ssl_info(puny_domain)
-
-    # ========== IP адреса через разные DNS ==========
-    for dns_ip, provider_name in DNS_SERVERS.items():
-        ips = resolve_ip_via_dns(puny_domain, dns_ip)
-        for ip in ips:
-            ptr = get_ptr(ip)
-            asn_data = asn_lookup(ip)
-            geo = get_geoip_info(ip)
-            data["servers"].append({
-                "resolver": provider_name,
-                "ip": ip,
-                "ptr": ptr,
-                "provider": asn_data.get("provider"),
-                "asn": asn_data.get("asn"),
-                "geoip": geo
-            })
-
-    # Убираем дубликаты IP
+    # ========== Параллельное выполнение независимых операций ==========
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        # 1. Запускаем WHOIS и DNS запросы параллельно
+        future_whois = executor.submit(get_whois_data, puny_domain)
+        future_ns = executor.submit(resolve_ns, puny_domain)
+        future_mx = executor.submit(resolve_mx, puny_domain)
+        future_txt = executor.submit(resolve_txt, puny_domain)
+        future_ssl = executor.submit(get_ssl_info, puny_domain)
+        
+        # 2. Резолв IP через разные DNS серверы параллельно
+        future_ips = {
+            executor.submit(resolve_ip_via_dns, puny_domain, dns_ip): provider_name
+            for dns_ip, provider_name in DNS_SERVERS.items()
+        }
+        
+        # Собираем результаты DNS
+        data["ns"] = future_ns.result()
+        mx_records = future_mx.result()
+        txt_records = future_txt.result()
+        data["ssl"] = future_ssl.result()
+        
+        # Обработка WHOIS
+        whois_result = future_whois.result()
+        resolved_ns_norm = {ns.lower().rstrip('.') for ns in data["ns"] if ns}
+        
+        # Добавляем WHOIS поля
+        data["whois"] = whois_result["whois_items"]
+        
+        # Добавляем NS из WHOIS, которых нет в реальных NS
+        for ns in whois_result["name_servers"]:
+            if ns not in resolved_ns_norm:
+                data["whois"].append(f"Name Server: {ns}")
+        
+        # Обработка почтовых записей
+        data["mail"] = {
+            "mx": mx_records,
+            "spf": extract_records_by_prefix(txt_records, "v=spf1"),
+            "dkim": extract_records_by_prefix(txt_records, "v=dkim1"),
+            "dmarc": extract_records_by_prefix(txt_records, "v=dmarc1")
+        }
+        
+        # 3. Собираем все IP адреса
+        all_ips = []  # [(ip, provider_name), ...]
+        for future in concurrent.futures.as_completed(future_ips):
+            provider_name = future_ips[future]
+            try:
+                ips = future.result()
+                all_ips.extend([(ip, provider_name) for ip in ips])
+            except Exception:
+                pass
+        
+        # 4. Параллельно получаем информацию о каждом IP
+        future_server_info = {
+            executor.submit(process_server_info, ip, provider_name): (ip, provider_name)
+            for ip, provider_name in all_ips
+        }
+        
+        for future in concurrent.futures.as_completed(future_server_info):
+            try:
+                server_data = future.result()
+                data["servers"].append(server_data)
+            except Exception:
+                pass
+    
+    # Убираем дубликаты IP (сохраняем первый встреченный)
     if data["servers"]:
         unique_servers = []
         seen_ips = set()
@@ -256,9 +313,12 @@ def print_pretty_results(results: Dict[str, Any]):
 
 def process_domains(domains: List[str]):
     """Основная функция обработки списка доменов."""
-    print(f"\n🚀 Начинаем обработку...\n")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    print(f"\n🚀 Начинаем обработку {len(domains)} доменов...\n")
+    
+    # Увеличиваем количество workers для параллельной обработки доменов
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         results = dict(zip(domains, executor.map(process_domain, domains)))
+    
     print_pretty_results(results)
 
 

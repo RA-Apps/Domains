@@ -1,15 +1,21 @@
-"""DNS утилиты."""
+"""DNS утилиты (оптимизированные с таймаутами)."""
 
 from typing import List, Optional
 import dns.resolver
 import dns.reversename
 
 
+# Стандартный резолвер с таймаутом
+_resolver = dns.resolver.Resolver()
+_resolver.timeout = 3
+_resolver.lifetime = 5
+
+
 def resolve_ns(domain: str) -> List[str]:
     """Получение NS записей для домена (с fallback на родительский)."""
     def query(d):
         try:
-            answers = dns.resolver.resolve(d, "NS")
+            answers = _resolver.resolve(d, "NS", lifetime=3)
             return [str(r.target).rstrip('.') for r in answers]
         except Exception:
             return []
@@ -21,7 +27,7 @@ def resolve_ns(domain: str) -> List[str]:
 
 def resolve_mx(domain: str) -> List[str]:
     try:
-        answers = dns.resolver.resolve(domain, "MX")
+        answers = _resolver.resolve(domain, "MX", lifetime=3)
         return [f"{r.preference} {str(r.exchange).rstrip('.')}" for r in answers]
     except Exception:
         return []
@@ -29,7 +35,7 @@ def resolve_mx(domain: str) -> List[str]:
 
 def resolve_txt(domain: str) -> List[str]:
     try:
-        answers = dns.resolver.resolve(domain, "TXT")
+        answers = _resolver.resolve(domain, "TXT", lifetime=3)
         txt_records = []
         for r in answers:
             if not getattr(r, "strings", None):
@@ -50,8 +56,10 @@ def extract_records_by_prefix(txt_records: List[str], prefix: str) -> List[str]:
 def resolve_ip_via_dns(domain: str, dns_server: str) -> List[str]:
     resolver = dns.resolver.Resolver()
     resolver.nameservers = [dns_server]
+    resolver.timeout = 3
+    resolver.lifetime = 5
     try:
-        answers = resolver.resolve(domain, "A")
+        answers = resolver.resolve(domain, "A", lifetime=3)
         return [r.address for r in answers]
     except Exception:
         return []
@@ -60,7 +68,7 @@ def resolve_ip_via_dns(domain: str, dns_server: str) -> List[str]:
 def get_ptr(ip: str) -> Optional[str]:
     try:
         rev = dns.reversename.from_address(ip)
-        ptr = dns.resolver.resolve(rev, "PTR")
+        ptr = _resolver.resolve(rev, "PTR", lifetime=3)
         return str(ptr[0]).rstrip('.')
     except Exception:
         return None

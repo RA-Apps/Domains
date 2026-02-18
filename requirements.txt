@@ -2,6 +2,4 @@ python-whois
 cryptography
 dnspython
 aiohttp
-aiodns
-aiofiles
-asyncio-throttle
+idna
