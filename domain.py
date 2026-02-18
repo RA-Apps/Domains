@@ -329,6 +329,6 @@ def main():
         sys.exit(1)
     domains = sys.argv[1:]
     process_domains(domains)
-
+    print("")
 if __name__ == "__main__":
     main()

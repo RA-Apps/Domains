@@ -207,7 +207,7 @@ def format_spf_parsed(parsed: Dict[str, Any]) -> str:
             for mech in mech_groups[mtype]:
                 icon = qualifier_icons.get(mech["qualifier"], "✓")
                 value = mech["value"] or "(текущий домен)"
-                lines.append(f"     {icon} {value}")
+                lines.append(f"    {icon} {value}")
     
     # Модификаторы
     if parsed.get("modifiers"):
