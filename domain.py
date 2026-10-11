@@ -11,7 +11,25 @@ import whois
 from utils import retry, format_date
 from dns_utils import resolve_ns, resolve_mx, resolve_txt, extract_records_by_prefix, resolve_ip_via_dns, get_ptr, parse_spf, format_spf_parsed, resolve_dkim, resolve_dmarc, parse_dmarc, format_dmarc_parsed
 from ssl_utils import get_ssl_info
-from network_utils import asn_lookup, scan_ports, COMMON_PORTS
+from network_utils import asn_lookup, scan_ports, COMMON_PORTS, raw_whois_query
+
+
+# Прямые WHOIS серверы для TLD, которые не обрабатываются библиотекой whois
+# Формат: TLD -> (whois-сервер, кодировка ответа)
+DIRECT_WHOIS_SERVERS = {
+    "by": ("whois.cctld.by", "utf-8"),
+    "бел": ("whois.cctld.by", "utf-8"),
+    "xn--90ais": ("whois.cctld.by", "utf-8"),
+}
+
+# Поля для парсинга прямого ответа (ключ "key: value" -> подпись в выводе)
+WHOIS_DIRECT_FIELDS = [
+    ("registrar", "Registrar"),
+    ("org", "Org"),
+    ("update date", "Update Date"),
+    ("creation date", "Creation Date"),
+    ("expiration date", "Expiration Date"),
+]
 
 
 
@@ -23,6 +41,50 @@ DNS_SERVERS = {
 }
 
 
+def get_direct_whois_data(puny_domain: str) -> Dict[str, Any]:
+    """Прямой WHOIS запрос к серверу реестра для TLD без поддержки в библиотеке whois."""
+    result = {
+        "whois_items": [],
+        "name_servers": set()
+    }
+
+    tld = puny_domain.rsplit(".", 1)[-1].lower()
+    server_encoding = DIRECT_WHOIS_SERVERS.get(tld)
+    if not server_encoding:
+        return result
+
+    server, encoding = server_encoding
+    text = retry(raw_whois_query, server, puny_domain, encoding=encoding, max_attempts=2, delay=1)
+    if not text:
+        return result
+
+    # Парсим построчно формат "Key: value"
+    fields = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip().lower()
+        value = value.strip()
+        if not value:
+            continue
+        if key == "name server":
+            result["name_servers"].add(value.lower().rstrip("."))
+        elif key not in fields:
+            fields[key] = value
+
+    # Если в ответе нет имени домена — домен не найден
+    if not fields.get("domain name"):
+        return {"whois_items": [], "name_servers": set()}
+
+    for attr, label in WHOIS_DIRECT_FIELDS:
+        val = fields.get(attr)
+        if val:
+            result["whois_items"].append(f"{label}: {val}")
+
+    return result
+
+
 def get_whois_data(puny_domain: str) -> Dict[str, Any]:
     """Получение WHOIS данных (вынесено для параллельного выполнения)."""
     whois_data = retry(whois.whois, puny_domain, max_attempts=2, delay=1)
@@ -30,61 +92,65 @@ def get_whois_data(puny_domain: str) -> Dict[str, Any]:
         "whois_items": [],
         "name_servers": set()
     }
-    
-    if not whois_data:
-        return result
-        
-    try:
-        # Проверяем наличие имени домена в ответе
-        has_domain_info = False
-        if hasattr(whois_data, 'domain_name') and whois_data.domain_name:
-            has_domain_info = True
-        elif isinstance(whois_data, dict) and whois_data.get('domain_name'):
-            has_domain_info = True
 
-        if has_domain_info:
-            fields = [
-                ('registrar', 'Registrar'),
-                ('registrar_url', 'Registrar URL'),
-                ('org', 'Org'),
-                ('updated_date', 'Update Date'),
-                ('creation_date', 'Creation Date'),
-                ('expiration_date', 'Expiration Date')
-            ]
+    if whois_data:
+        try:
+            # Проверяем наличие имени домена в ответе
+            has_domain_info = False
+            if hasattr(whois_data, 'domain_name') and whois_data.domain_name:
+                has_domain_info = True
+            elif isinstance(whois_data, dict) and whois_data.get('domain_name'):
+                has_domain_info = True
 
-            for attr, label in fields:
-                val = None
-                if hasattr(whois_data, attr):
-                    val = getattr(whois_data, attr, None)
-                elif isinstance(whois_data, dict):
-                    val = whois_data.get(attr)
+            if has_domain_info:
+                fields = [
+                    ('registrar', 'Registrar'),
+                    ('registrar_url', 'Registrar URL'),
+                    ('org', 'Org'),
+                    ('updated_date', 'Update Date'),
+                    ('creation_date', 'Creation Date'),
+                    ('expiration_date', 'Expiration Date')
+                ]
 
-                if val:
-                    if 'date' in attr:
-                        val = format_date(val)
+                for attr, label in fields:
+                    val = None
+                    if hasattr(whois_data, attr):
+                        val = getattr(whois_data, attr, None)
+                    elif isinstance(whois_data, dict):
+                        val = whois_data.get(attr)
+
                     if val:
-                        result["whois_items"].append(f"{label}: {val}")
+                        if 'date' in attr:
+                            val = format_date(val)
+                        if val:
+                            result["whois_items"].append(f"{label}: {val}")
 
-            # Name servers из whois
-            name_servers = None
-            if hasattr(whois_data, 'name_servers'):
-                name_servers = whois_data.name_servers
-            elif isinstance(whois_data, dict):
-                name_servers = whois_data.get('name_servers')
+                # Name servers из whois
+                name_servers = None
+                if hasattr(whois_data, 'name_servers'):
+                    name_servers = whois_data.name_servers
+                elif isinstance(whois_data, dict):
+                    name_servers = whois_data.get('name_servers')
 
-            if name_servers:
-                if isinstance(name_servers, str):
-                    name_servers = [name_servers]
-                for ns in name_servers:
-                    try:
-                        ns_norm = ns.lower().rstrip('.')
-                        if ns_norm:
-                            result["name_servers"].add(ns_norm)
-                    except Exception:
-                        continue
-    except Exception as e:
-        print(f"  Ошибка обработки WHOIS данных: {e}")
-    
+                if name_servers:
+                    if isinstance(name_servers, str):
+                        name_servers = [name_servers]
+                    for ns in name_servers:
+                        try:
+                            ns_norm = ns.lower().rstrip('.')
+                            if ns_norm:
+                                result["name_servers"].add(ns_norm)
+                        except Exception:
+                            continue
+        except Exception as e:
+            print(f"  Ошибка обработки WHOIS данных: {e}")
+
+    # Если библиотека whois не дала данных — пробуем прямой запрос к серверу реестра
+    if not result["whois_items"] and not result["name_servers"]:
+        direct = get_direct_whois_data(puny_domain)
+        if direct["whois_items"] or direct["name_servers"]:
+            return direct
+
     return result
 
 

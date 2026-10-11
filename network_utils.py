@@ -40,6 +40,27 @@ def scan_ports(ip: str, ports: List[int] = None, timeout: float = 1.0, max_worke
     return sorted(open_ports)
 
 
+def raw_whois_query(server: str, query: str, timeout: float = 10.0, encoding: str = "utf-8") -> Optional[str]:
+    """Прямой WHOIS запрос к указанному серверу (порт 43)."""
+    try:
+        s = socket.create_connection((server, 43), timeout=timeout)
+        s.sendall(f"{query}\r\n".encode())
+        s.settimeout(timeout)
+        resp = b""
+        try:
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                resp += chunk
+        except socket.timeout:
+            pass
+        s.close()
+        return resp.decode(encoding, errors="replace")
+    except Exception:
+        return None
+
+
 def _parse_ripe_whois(ip: str) -> Dict[str, Optional[str]]:
     """Парсит whois.ripe.net для получения org-name, netname, country и asn."""
     result = {"netname": None, "org_name": None, "country": None, "asn": None}
